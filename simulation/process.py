@@ -23,46 +23,54 @@ def tire_process(env, sku, factory, kpi):
     factory.prev_sku = sku
 
     # ----------------------
-    # HEEL (with blocking)
-    # ----------------------
-    req = factory.heel.request()
-    wait_start = env.now
-
-    yield req   # wait happens here
-
-    wait_time = env.now - wait_start
-    kpi.blocking += wait_time
-
-    if factory.heel_comp < r["heel"]:
-        yield env.timeout(5)
-        factory.heel_comp = config.MAX_COMPOUND
-
-    factory.heel_comp -= r["heel"]
-
-    yield env.timeout(tri(config.HEEL_TIME))
-
-    factory.heel.release(req)
-
-    # ----------------------
-    # SOFT
+    # HEEL (ONLY FOR 3-LAYER)
     # ----------------------
     if r["layers"] == 3:
 
-        req = factory.soft.request()
+        req = factory.heel.request()
+        wait_start = env.now
         yield req
 
-        if factory.soft_comp < r["soft"]:
+        kpi.blocking += (env.now - wait_start)
+
+        if factory.heel_comp < r["heel"]:
             yield env.timeout(5)
-            factory.soft_comp = config.MAX_COMPOUND
+            factory.heel_comp = config.MAX_COMPOUND
 
-        factory.soft_comp -= r["soft"]
+        factory.heel_comp -= r["heel"]
 
-        yield env.timeout(tri(config.SOFT_TIME))
+        yield env.timeout(tri(config.HEEL_TIME))
 
-        factory.soft.release(req)
+        factory.heel.release(req)
+
 
     # ----------------------
-    # TREAD
+    # SOFT (FOR BOTH 2 & 3 LAYER)
+    # ----------------------
+    req = factory.soft.request()
+    wait_start = env.now
+    yield req
+
+    kpi.blocking += (env.now - wait_start)
+
+    start_time = env.now
+
+    if factory.soft_comp < r["soft"]:
+        yield env.timeout(5)
+        factory.soft_comp = config.MAX_COMPOUND
+
+    factory.soft_comp -= r["soft"]
+
+    yield env.timeout(tri(config.SOFT_TIME))
+
+    # time-based utilization
+    kpi.soft_util += (env.now - start_time)
+
+    factory.soft.release(req)
+
+
+    # ----------------------
+    # TREAD (FINAL STEP)
     # ----------------------
     tread_machine = factory.gray if r["color"] == "gray" else factory.black
 

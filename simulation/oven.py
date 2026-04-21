@@ -9,7 +9,7 @@ class Oven:
         self.sku = sku
 
         # initialize random remaining curing time
-        self.remaining_time = random.randint(10, recipes[sku]["curing"])
+        self.remaining_time = random.uniform(0.3 * recipes[sku]["curing"], recipes[sku]["curing"])
 
     def update(self, time_passed):
 

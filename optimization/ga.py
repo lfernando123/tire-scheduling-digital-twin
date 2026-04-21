@@ -1,5 +1,7 @@
 import random
 from data.setup_matrix import SKUS
+from data.recipes import recipes
+from simulation.oven import Oven
 from simulation.simulation_runner import run_simulation
 from optimization.fitness_cache import fitness_cache
 
@@ -21,34 +23,52 @@ def sequence_penalty(seq, out_seq):
     return penalty
 
 
-def fitness(seq, demand, out_seq):
-
-    key = tuple(seq)
-
-    if key in fitness_cache:
-        return fitness_cache[key]
+def fitness(seq, out_seq):
 
     result = run_simulation(seq)
 
-    # demand matching penalty
-    demand_penalty = 0
-    for sku in demand:
-        produced = seq.count(sku)
-        needed = demand[sku]
-        demand_penalty += abs(needed - produced)
+    # -----------------------------
+    # 1. Sequence Matching (MOST IMPORTANT)
+    # -----------------------------
+    out_skus = [item["sku"] for item in out_seq]
 
-    penalty_seq = sequence_penalty(seq, out_seq)
+    seq_penalty = 0
 
+    for i in range(min(len(seq), len(out_skus))):
+        if seq[i] != out_skus[i]:
+            # earlier mismatch = higher penalty
+            seq_penalty += (len(seq) - i)
+
+    # -----------------------------
+    # 2. Soft Compound Changeovers (CRITICAL)
+    # -----------------------------
+    soft_change = 0
+
+    for i in range(1, len(seq)):
+        prev = seq[i-1]
+        curr = seq[i]
+
+        # only consider 3-layer tires (soft layer exists)
+        if recipes[prev]["layers"] == 3 and recipes[curr]["layers"] == 3:
+
+            if prev != curr:
+                soft_change += 1
+
+    # -----------------------------
+    # 3. General Setup (Optional)
+    # -----------------------------
+    setup_penalty = result["setup"]
+
+    # -----------------------------
+    # FINAL SCORE
+    # -----------------------------
     score = (
-        5 * result["throughput"]
-        - 3 * result["setup"]
-        - 4 * result["starvation"]
-        - 2 * result["blocking"]
-        - 2 * demand_penalty
-        - 3 * penalty_seq
+        -10 * seq_penalty      # VERY IMPORTANT
+        -8  * soft_change      # CRITICAL
+        -2  * setup_penalty    # less important
+        +3  * result["throughput"]
     )
 
-    fitness_cache[key] = score
     return score
 
 
@@ -72,9 +92,9 @@ def mutate(seq, SKUS):
     return seq
 
 
-def GA(demand, out_seq):
+def GA(out_seq):
 
-    SKUS = list(demand.keys()) if demand else ["A","B","C"]
+    SKUS = list(recipes.keys())
 
     # -----------------------
     # Initial Population
@@ -83,7 +103,7 @@ def GA(demand, out_seq):
 
     # Heuristic seed
     # Use curing out sequence as priority
-    base_seq = out_seq[:LEN]
+    base_seq = [item["sku"] for item in out_seq[:LEN]]
 
     if len(base_seq) < LEN:
         base_seq += [random.choice(SKUS)] * (LEN - len(base_seq))
@@ -99,13 +119,18 @@ def GA(demand, out_seq):
         seq = [random.choice(SKUS) for _ in range(LEN)]
         pop.append(seq)
 
+    for seq in pop:
+        for x in seq:
+            if not isinstance(x, str):
+                print("ERROR: Non-string in sequence →", x)
+
     # -----------------------
     # GA Evolution
     # -----------------------
     for g in range(GEN):
 
         # evaluate
-        pop = sorted(pop, key=lambda x: fitness(x, demand, out_seq), reverse=True)
+        pop = sorted(pop, key=lambda x: fitness(x, out_seq), reverse=True)
 
         new_pop = pop[:ELITE]  # elitism
 
@@ -121,6 +146,6 @@ def GA(demand, out_seq):
 
         pop = new_pop
 
-    best = max(pop, key=lambda x: fitness(x, demand, out_seq))
+    best = max(pop, key=lambda x: fitness(x, out_seq))
 
     return best

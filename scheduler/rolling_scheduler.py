@@ -35,7 +35,7 @@ def scheduler(env):
         out_seq = oven_system.get_out_sequence(30)
 
         # run GA
-        best_seq = GA(demand, out_seq)
+        best_seq = GA(out_seq)
 
         # ==========================
         # 🔥 PRINT EVERYTHING HERE
@@ -45,7 +45,8 @@ def scheduler(env):
         print("==============================")
 
         print("\n=== CURING OUT SEQUENCE ===")
-        print(out_seq)
+        for item in out_seq:
+            print(f"Time: {round(item['time'],2)} min → SKU {item['sku']} (Oven {item['oven_id']})")
 
         # 1. Oven demand
         print("\n=== OVEN DEMAND ===")

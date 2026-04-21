@@ -42,18 +42,19 @@ class OvenSystem:
     
     def get_out_sequence(self, horizon=30):
 
-        """
-        Return ordered list of SKUs based on curing completion
-        """
+        finishing = []
 
-        # select ovens finishing within horizon
-        finishing = [
-            oven for oven in self.ovens
-            if oven.remaining_time <= horizon
-        ]
+        for oven in self.ovens:
 
-        # sort by remaining time (earliest first)
-        finishing.sort(key=lambda x: x.remaining_time)
+            if oven.remaining_time <= horizon:
 
-        # return SKU sequence
-        return [oven.sku for oven in finishing]
+                finishing.append({
+                    "oven_id": oven.oven_id,
+                    "sku": oven.sku,
+                    "time": oven.remaining_time
+                })
+
+        # sort by earliest completion
+        finishing.sort(key=lambda x: x["time"])
+
+        return finishing
