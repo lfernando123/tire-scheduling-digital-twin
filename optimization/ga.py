@@ -3,9 +3,9 @@ from data.setup_matrix import SKUS
 from simulation.simulation_runner import run_simulation
 from optimization.fitness_cache import fitness_cache
 
-POP = 30
-GEN = 15
-LEN = 15
+POP = 40
+GEN = 30
+LEN = 8
 ELITE = 2
 MUT_RATE = 0.2
 
