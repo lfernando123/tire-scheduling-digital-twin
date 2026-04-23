@@ -48,14 +48,14 @@ def scheduler(env):
         for item in out_seq:
             print(f"Time: {round(item['time'],2)} min → SKU {item['sku']} (Oven {item['oven_id']})")
 
-        # 1. Oven demand
-        print("\n=== OVEN DEMAND ===")
-        for k,v in demand.items():
-            print(f"{k}: {v}")
+        # # 1. Oven demand
+        # print("\n=== OVEN DEMAND ===")
+        # for k,v in demand.items():
+        #     print(f"{k}: {v}")
 
-        # 2. Setup matrix
-        if demand:
-            print_setup_matrix(list(demand.keys()))
+        # # 2. Setup matrix
+        # if demand:
+        #     print_setup_matrix(list(demand.keys()))
 
         # 3. Best sequence
         print("\n=== BEST SEQUENCE ===")

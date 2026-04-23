@@ -5,4 +5,4 @@ env = simpy.Environment()
 
 env.process(scheduler(env))
 
-env.run(until=1440)
+env.run(until=30)
