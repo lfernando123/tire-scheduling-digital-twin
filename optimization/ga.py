@@ -36,77 +36,16 @@ def estimate_production_times(seq):
 
     return times
 
-# def fitness(seq, out_seq):
-
-#     result = run_simulation(seq)
-
-#     # -----------------------------
-#     # 1. Sequence Matching (MOST IMPORTANT)
-#     # -----------------------------
-#     out_skus = [item["sku"] for item in out_seq]
-#     out_times = [item["time"] for item in out_seq]
-
-#     seq_penalty = 0
-
-#     for i in range(min(len(seq), len(out_skus))):
-#         if seq[i] != out_skus[i]:
-#             # earlier mismatch = higher penalty
-#             seq_penalty += (len(seq) - i)
-
-#     freq_penalty = 0
-
-#     for sku in set(out_skus):
-#         freq_penalty += abs(seq.count(sku) - out_skus.count(sku))
-
-#     # prod_times = estimate_production_times(seq)
-
-#     # time_penalty = 0
-
-#     # for i in range(min(len(seq), len(out_skus))):
-
-#     #     if seq[i] == out_skus[i]:
-#     #         # correct SKU → check timing
-#     #         time_diff = abs(prod_times[i] - out_times[i])
-#     #         time_penalty += time_diff
-
-#     #     else:
-#     #         # wrong SKU → heavy penalty
-#     #         time_penalty += 50
-
-#     # -----------------------------
-#     # 2. Soft Compound Changeovers (CRITICAL)
-#     # -----------------------------
-#     soft_change = 0
-
-#     for i in range(1, len(seq)):
-#         prev = seq[i-1]
-#         curr = seq[i]
-
-#         # only consider 3-layer tires (soft layer exists)
-#         if recipes[prev]["layers"] == 3 and recipes[curr]["layers"] == 3:
-
-#             if prev != curr:
-#                 soft_change += 1
-
-#     # -----------------------------
-#     # 3. General Setup (Optional)
-#     # -----------------------------
-#     setup_penalty = result["setup"]
-
-#     # -----------------------------
-#     # FINAL SCORE
-#     # -----------------------------
-#     score = (
-#         -10 * seq_penalty
-#         -5 * freq_penalty
-#         -2 * soft_change
-#         -2 * result["setup"]
-#         +3 * result["throughput"]
-#     )
-
-#     return score
 
 def fitness(seq, out_seq):
+
+    # ----------------------
+    # SAFE CACHE KEY
+    # ----------------------
+    key = tuple(seq)   # only sequence (safe)
+
+    if key in fitness_cache:
+        return fitness_cache[key]
 
     if len(set(seq)) == 1:
         return 0
@@ -167,7 +106,7 @@ def fitness(seq, out_seq):
     # FINAL SCORE (BALANCED)
     # -----------------------------
     score = (
-        0.35 * seq_score       # 🔥 most important
+        0.35 * seq_score
         + 0.25 * freq_score
         + 0.15 * soft_score
         + 0.15 * throughput_score
@@ -255,12 +194,12 @@ def GA(out_seq):
     # 1. Base sequence
     pop.append(base_seq)
 
-    # 2. Perturbations (30%)
-    for _ in range(int(POP * 0.3)):
+    # 2. Perturbations (40%)
+    for _ in range(int(POP * 0.4)):
         pop.append(perturb_sequence(base_seq, SKUS, 0.3))
 
-    # 3. Sequence repetition (40%)
-    for _ in range(int(POP * 0.4)):
+    # 3. Sequence repetition (60%)
+    for _ in range(int(POP * 0.6)):
         seq = []
         while len(seq) < LEN:
             sku = random.choice([item["sku"] for item in out_seq])
@@ -270,34 +209,7 @@ def GA(out_seq):
                     seq.append(sku)
         pop.append(seq)
 
-    # 4. Random (remaining)
-    while len(pop) < POP:
-        seq = [random.choice(SKUS) for _ in range(LEN)]
-        pop.append(seq)
-
-    # priority_skus = [item["sku"] for item in out_seq]
-
-    # for _ in range(POP-1):
-
-    #     seq = []
-
-    #     while len(seq) < LEN:
-
-    #         # pick SKU from out_seq priority
-    #         sku = random.choice(priority_skus) if priority_skus else random.choice(SKUS)
-
-    #         # repeat count (IMPORTANT)
-    #         repeat = random.randint(1, 3)
-
-    #         for _ in range(repeat):
-    #             if len(seq) < LEN:
-    #                 seq.append(sku)
-
-    #     pop.append(seq)
-    
-
     print(pop)
-
 
     # -----------------------
     # GA Evolution
@@ -315,6 +227,7 @@ def GA(out_seq):
             p2 = random.choice(pop[:10])
 
             child = crossover(p1, p2)
+            
             child = mutate(child, SKUS)
 
             new_pop.append(child)
