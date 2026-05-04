@@ -51,7 +51,8 @@ class OvenSystem:
                 finishing.append({
                     "oven_id": oven.oven_id,
                     "sku": oven.sku,
-                    "time": oven.remaining_time
+                    "time": oven.remaining_time,
+                    "soft_weight": oven.soft_weight
                 })
 
         # sort by earliest completion

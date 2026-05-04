@@ -11,6 +11,8 @@ class Oven:
         # initialize random remaining curing time
         self.remaining_time = random.uniform(0.3 * recipes[sku]["curing"], recipes[sku]["curing"])
 
+        self.soft_weight = recipes[sku]["weight"]
+
     def update(self, time_passed):
 
         self.remaining_time -= time_passed
