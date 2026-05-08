@@ -51,7 +51,7 @@ def plot_comparison(heur_kpi, ga_kpi):
 
 def scheduler(env):
 
-    oven_system = OvenSystem(45)
+    oven_system = OvenSystem(90)
 
     out_seq = oven_system.get_out_sequence(30)
 
@@ -80,7 +80,7 @@ def scheduler(env):
 
         print("\n=== CURING OUT SEQUENCE ===")
         for item in out_seq:
-            print(f"Time: {round(item['time'],2)} min → SKU {item['sku']} (Oven {item['oven_id']})")
+            print(f"Time: {round(item['time'],2)} min → SKU {item['sku']} (Oven {item['oven']})")
 
         # # 1. Oven demand
         # print("\n=== OVEN DEMAND ===")

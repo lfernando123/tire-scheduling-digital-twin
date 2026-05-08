@@ -1,3 +1,4 @@
+# from curses.ascii import alt
 import random
 from data.setup_matrix import SKUS
 from data.recipes import recipes
@@ -6,12 +7,14 @@ from simulation.simulation_runner import run_simulation
 from optimization.fitness_cache import fitness_cache
 from simulation.kpi import KPI
 import config
+from collections import defaultdict
 
-POP = 40
-GEN = 60
-LEN = 8
+POP = 30
+GEN = 45
+LEN = 15
 ELITE = 2
 MUT_RATE = 0.2
+weight_map = defaultdict(list)
 
 def estimate_production_times(seq):
 
@@ -39,10 +42,7 @@ def estimate_production_times(seq):
 
 def fitness(seq, out_seq):
 
-    # ----------------------
-    # SAFE CACHE KEY
-    # ----------------------
-    key = tuple(seq)   # only sequence (safe)
+    key = tuple(seq)
 
     if key in fitness_cache:
         return fitness_cache[key]
@@ -52,96 +52,94 @@ def fitness(seq, out_seq):
 
     result = run_simulation(seq)
 
+    # --------------------------------
+    # EXTRACT DATA
+    # --------------------------------
     out_skus = [item["sku"] for item in out_seq]
 
-    # -----------------------------
-    # 1. SEQUENCE MATCH (PRIORITY)
-    # -----------------------------
-    # seq_penalty = 0
+    out_lines = [item["line"] for item in out_seq]
 
-    # for i in range(min(len(seq), len(out_skus))):
-    #     if seq[i] != out_skus[i]:
-    #         seq_penalty += (len(seq) - i)
+    # --------------------------------
+    # BUILD WEIGHT MAP
+    # --------------------------------
+    weight_map = defaultdict(list)
 
-    # seq_score = 1 - (seq_penalty / (len(seq)**2 + 1))
+    for item in out_seq:
+        weight_map[item["sku"]].append(item["weight"])
 
-    out_weights = [item["soft_weight"] for item in out_seq]
+    # --------------------------------
+    # 1. SEQUENCE MATCH
+    # --------------------------------
+    match_score = 0
 
-    # -------------------------
-    # COMPONENT SCORES
-    # -------------------------
-    s1 = sequence_score(seq, out_skus)
-    s2 = soft_order_score(seq, out_weights)
-    s3 = zigzag_score(seq)
+    for i in range(min(len(seq), len(out_skus))):
 
+        if seq[i] == out_skus[i]:
+            match_score += 1
 
-    # # -----------------------------
-    # # 2. SKU DISTRIBUTION MATCH
-    # # -----------------------------
-    # freq_penalty = 0
+    match_norm = match_score / len(seq)
 
-    # for sku in set(out_skus):
-    #     freq_penalty += abs(seq.count(sku) - out_skus.count(sku))
+    # --------------------------------
+    # 2. SOFT GROUPING
+    # --------------------------------
+    soft_raw = soft_order_score(seq, weight_map)
 
-    # freq_score = 1 - (freq_penalty / (len(seq) + 1))
+    # theoretical max
+    max_soft = sum([(i+1)**2 for i in range(len(seq))])
 
+    soft_norm = soft_raw / max_soft
 
-    # -----------------------------
-    # 3. SOFT CHANGEOVER
-    # -----------------------------
-    soft_change = 0
+    # nonlinear amplification
+    soft_final = soft_norm ** 2
 
-    for i in range(1, len(seq)):
-        if recipes[seq[i]]["layers"] == 3 and recipes[seq[i-1]]["layers"] == 3:
-            if seq[i] != seq[i-1]:
-                soft_change += 1
+    # --------------------------------
+    # 3. ZIGZAG
+    # --------------------------------
+    pattern = select_pattern(out_seq)
 
-    soft_score = 1 - (soft_change / (len(seq) + 1))
-
-
-    # -----------------------------
-    # 4. SETUP (normalize)
-    # -----------------------------
-    setup_score = 1 - (result["setup"] / (result["setup"] + 1000))
-
-
-    # -----------------------------
-    # 5. THROUGHPUT
-    # -----------------------------
-    throughput_score = result["throughput"] / (len(seq) + 1)
-
-
-    # -----------------------------
-    # 6. TIME VIOLATION (PENALTY)
-    # -----------------------------
-
-    prod_times = estimate_times(seq)
-
-    time_violation = 0
-
-    for i in range(len(seq)):
-        for j in range(i+1, len(seq)):
-
-            if seq[i] == seq[j]:
-
-                if abs(prod_times[j] - prod_times[i]) > 10:
-                    time_violation += 1
-    
-    time_score = 1 / (1 + time_violation)
-
-
-    # -----------------------------
-    # FINAL SCORE (BALANCED)
-    # -----------------------------
-    score = (
-        0.20 * s1
-        + 0.20 * s2
-        + 0.20 * s3
-        + 0.20 * throughput_score
-        + 0.10 * setup_score
-        + 0.10 * time_score
+    zigzag_raw = zigzag_score(
+        out_lines,
+        pattern
     )
 
+    zigzag_norm = normalize(
+        zigzag_raw,
+        -len(seq),
+        len(seq)
+    )
+
+    # --------------------------------
+    # 4. THROUGHPUT
+    # --------------------------------
+    throughput_norm = result["throughput"] / (len(seq) + 1)
+
+    # --------------------------------
+    # 5. SETUP PENALTY
+    # --------------------------------
+    setup_penalty = 1 / (1 + result["setup"])
+
+    # --------------------------------
+    # FINAL SCORE
+    # --------------------------------
+    score = (
+        0.50 * soft_final
+        + 0.20 * match_norm
+        + 0.10 * zigzag_norm
+        + 0.10 * throughput_norm
+        + 0.10 * setup_penalty
+    )
+
+    # --------------------------------
+    # HARD PENALTY
+    # --------------------------------
+    if soft_raw < len(seq):
+        score *= 0.5
+
+    if score > 1.5:
+        print(seq)
+        print("Sequence:", match_norm, "soft_orders1", soft_final, "zigzag", zigzag_norm, "throughput", throughput_norm, "setup", setup_penalty, "→", score)
+
+    fitness_cache[key] = score
     return score
 
 
@@ -207,166 +205,519 @@ def perturb_sequence(seq, SKUS, intensity=0.2):
 
     return new_seq
 
+# =========================================================
+# CHROMOSOME GENERATION PIPELINE
+# =========================================================
 
-def tournament(pop, out_seq, tournament_size=3):
+# ---------------------------------------------------------
+# Chromosome 1
+# Original curing out sequence
+# ---------------------------------------------------------
+def chromosome_1(out_seq, LEN):
+    print("Chromosome 1:", [item["sku"] for item in out_seq[:LEN]])
+    return out_seq[:LEN]
+
+
+# =========================================================
+# VALID ZIGZAG PATTERNS
+# =========================================================
+ZIGZAG_PATTERNS = [
+    ["l1a", "l2b", "l1b", "l2a"],
+    ["l1b", "l2b", "l1a", "l2a"],
+    ["l1a", "l2a", "l1b", "l2b"],
+    ["l1b", "l2a", "l1a", "l2b"],
+    ["l2a", "l1b", "l2b", "l1a"],
+    ["l2a", "l1a", "l2b", "l1b"],
+    ["l2b", "l1b", "l2a", "l1a"],
+    ["l2b", "l1a", "l2a", "l1b"]
+]
+
+
+# =========================================================
+# SELECT BEST PATTERN
+# =========================================================
+def select_pattern(prev_seq):
+
     """
-    Tournament selection: select best individual from random sample
+    Select zigzag pattern based on
+    last arranged chromosome.
     """
-    tournament_pop = random.sample(pop, min(tournament_size, len(pop)))
-    return max(tournament_pop, key=lambda x: fitness(x, out_seq))
+
+    if not prev_seq:
+        return ZIGZAG_PATTERNS[0]
+
+    first_line = prev_seq[0]["line"].lower()
+    second_line = prev_seq[1]["line"].lower()
+    i = 0
+
+    for pattern in ZIGZAG_PATTERNS:
+
+        if pattern[0] == first_line:
+            if pattern[1] == second_line:
+                return pattern
+            else:
+                rec_index = i
+            
+        i += 1
+
+    return ZIGZAG_PATTERNS[rec_index]
 
 
-def GA(out_seq):
+# =========================================================
+# Chromosome 2
+# Zigzag arrangement
+# =========================================================
+def chromosome_2(c1, out_seq):
 
-    SKUS = list(recipes.keys())
+    """
+    Strict zigzag arrangement.
 
-    # -----------------------
-    # Initial Population
-    # -----------------------
+    Must follow valid pattern order.
+    """
 
-    pop = []
+    pattern = select_pattern(c1)
 
-    out_skus = [item["sku"] for item in out_seq]
-    out_times = [item["time"] for item in out_seq]
-    out_weights = [item["soft_weight"] for item in out_seq]
-
-    # -----------------------------
-    # 1. BASE SEQUENCE (STRICT ORDER)
-    # -----------------------------
-    base_seq = out_skus[:LEN]
-
-    if len(base_seq) < LEN:
-        base_seq += [random.choice(out_skus) for _ in range(LEN - len(base_seq))]
-
-    pop.append(base_seq)
+    remaining = c1.copy()
 
     seq = []
 
-    # 2. grouped
-    pop.append(seq_grouped(out_skus, out_times, out_weights, LEN))
+    p = 0
 
-    # 3. zigzag
-    pop.append(seq_zigzag(out_skus, LEN))
+    other_out_seq = [item for item in out_seq if item not in c1]
 
+    while remaining:
 
-    # -----------------------------
-    # 2. GROUPED + TIME-AWARE GENERATION
-    # -----------------------------
-    for _ in range(POP-1):
+        target_line = pattern[p % len(pattern)]
 
-        seq = []
-        i = 0
+        if p % len(pattern) == 0:
+            next_valid_line = pattern[2]
+        elif p % len(pattern) == 1:
+            next_valid_line = pattern[3]
+        elif p % len(pattern) == 2:
+            next_valid_line = pattern[0]
+        else:
+            next_valid_line = pattern[1]
 
-        while len(seq) < LEN and i < len(out_skus):
+        found = False
 
-            sku = out_skus[i]
-            base_time = out_times[i]
+        prev_sku_time = remaining[0]["time"] if remaining else 0
 
-            # group SKUs within 10-minute window
-            group = [sku]
+        # --------------------------------
+        # SEARCH NEXT VALID ITEM
+        # --------------------------------
+        for i, item in enumerate(remaining):
 
-            j = i + 1
+            line = item["line"].lower()
 
-            while j < len(out_skus):
+            if line == target_line:
 
-                if out_skus[j] == sku and (out_times[j] - base_time) <= 10:
-                    group.append(out_skus[j])
-                    j += 1
-                else:
+                    seq.append(item)
+
+                    remaining.pop(i)
+
+                    found = True
+
                     break
 
-            # add grouped SKUs (with slight variation)
-            repeat = len(group)
+        # --------------------------------
+        # IF NOT FOUND
+        # --------------------------------
+        if not found:
 
-            # slight randomness
-            repeat += random.randint(0,1)
+            found2 = False
 
-            for _ in range(repeat):
-                if len(seq) < LEN:
-                    seq.append(sku)
+            for i, item in enumerate(other_out_seq):
 
-            i = j
+                time = item["time"]
 
-        # fill remaining
-        while len(seq) < LEN:
-            seq.append(random.choice(out_skus))
+                line = item["line"].lower()
+
+                if line == target_line and time - prev_sku_time <= 5:
+
+                    seq.append(item)
+
+                    other_out_seq.pop(i)
+
+                    found2 = True
+
+                    break
+
+            if not found2:
+                seq.append(remaining.pop(0))
 
 
 
-        pop.append(seq)
+        p += 1
+    print("Chromosome 2:", [item["sku"] for item in seq[:LEN]])
+    return seq
 
-    print(pop)
 
-    # -----------------------
-    # GA Evolution
-    # -----------------------
-    # for g in range(GEN):
+# =========================================================
+# Chromosome 3
+# Same SKU grouping within 5 min
+# =========================================================
+def chromosome_3(c2, out_seq, LEN):
 
-    #     # evaluate
-    #     pop = sorted(pop, key=lambda x: fitness(x, out_seq), reverse=True)
+    """
+    Group same SKU using nearby curing outputs.
 
-    #     new_pop = pop[:ELITE]  # elitism
+    Rules:
+    - Base window = first LEN items
+    - Can pull same SKU from future outputs
+    - Only within 5 min
+    - Weight <= 40
+    """
 
-    #     while len(new_pop) < POP:
+    base_window = c2[:LEN]
 
-    #         p1 = random.choice(pop[:10])
-    #         p2 = random.choice(pop[:10])
+    seq = []
 
-    #         child = crossover(p1, p2)
-            
-    #         child = mutate(child, SKUS)
+    used = set()
 
-    #         new_pop.append(child)
+    for base in base_window:
 
-    #     pop = new_pop
+        base_id = (
+            base["sku"],
+            base["time"],
+            base["oven"]
+        )
 
+        if base_id in used:
+            continue
+
+        sku = base["sku"]
+
+        t0 = base["time"]
+
+        total_weight = 0
+
+        # search entire pipeline
+        for item in out_seq:
+
+            item_id = (
+                item["sku"],
+                item["time"],
+                item["oven"]
+            )
+
+            if item_id in used:
+                continue
+
+            # same SKU only
+            if item["sku"] != sku:
+                continue
+
+            # within 5 min
+            if abs(item["time"] - t0) > 5:
+                continue
+
+            # weight limit
+            if total_weight + item["weight"] > 40:
+                continue
+
+            seq.append(item)
+
+            used.add(item_id)
+
+            total_weight += item["weight"]
+
+            if len(seq) >= LEN:
+                return seq
+
+    # fill remaining
+    for item in base_window:
+
+        item_id = (
+            item["sku"],
+            item["time"],
+            item["oven"]
+        )
+
+        if item_id not in used:
+
+            seq.append(item)
+
+            used.add(item_id)
+
+            if len(seq) >= LEN:
+                break
+    
+    print("Chromosome 3:", [item["sku"] for item in seq])
+    return seq
+
+
+# =========================================================
+# Chromosome 4
+# Zigzag while preserving grouping
+# =========================================================
+def chromosome_4(c3):
+
+    pattern = select_pattern(c3)
+
+    grouped = {
+        "l1a": [],
+        "l1b": [],
+        "l2a": [],
+        "l2b": []
+    }
+
+    # preserve grouping
+    for item in c3:
+
+        line = item["line"].lower()
+
+        grouped[line].append(item)
+
+    seq = []
+
+    while True:
+
+        added = False
+
+        for p in pattern:
+
+            if grouped[p]:
+
+                seq.append(grouped[p].pop(0))
+
+                added = True
+
+        if not added:
+            break
+
+    print("Chromosome 4:", [item["sku"] for item in seq])
+    return seq
+
+
+# =========================================================
+# Minor deterministic refinement
+# =========================================================
+def minor_adjustment(prev):
+
+    """
+    Small local deterministic improvements.
+    """
+
+    seq = prev.copy()
+
+    n = len(seq)
+
+    # -----------------------------------------------------
+    # Rule 1
+    # Bring same SKUs together
+    # -----------------------------------------------------
+    for i in range(1, n-1):
+
+        prev_sku = seq[i-1]["sku"]
+        curr_sku = seq[i]["sku"]
+        next_sku = seq[i+1]["sku"]
+
+        if prev_sku == next_sku and curr_sku != prev_sku:
+
+            seq[i], seq[i+1] = seq[i+1], seq[i]
+
+            return seq
+
+    # -----------------------------------------------------
+    # Rule 2
+    # Improve zigzag balance
+    # -----------------------------------------------------
+    for i in range(1, n-1):
+
+        prev_line = seq[i-1]["line"][-1].lower()
+        curr_line = seq[i]["line"][-1].lower()
+
+        if prev_line == curr_line:
+
+            seq[i], seq[i+1] = seq[i+1], seq[i]
+
+            return seq
+
+    # -----------------------------------------------------
+    # Rule 3
+    # Small local swap
+    # -----------------------------------------------------
+    for i in range(0, n-2, 2):
+
+        seq[i], seq[i+1] = seq[i+1], seq[i]
+
+        return seq
+
+    print("Chromosome 5:", [item["sku"] for item in seq])
+    return seq
+
+
+# =========================================================
+# Convert chromosome to SKU sequence
+# =========================================================
+def to_sku_seq(chromosome):
+
+    return [x["sku"] for x in chromosome]
+
+
+# =========================================================
+# FINAL INITIAL POPULATION GENERATION
+# =========================================================
+def generate_population(out_seq, LEN, POP):
+
+    pop = []
+
+    # -----------------------------------------------------
+    # Chromosome 1
+    # -----------------------------------------------------
+    c1 = chromosome_1(out_seq, LEN)
+    pop.append(c1)
+
+    # -----------------------------------------------------
+    # Chromosome 2
+    # -----------------------------------------------------
+    c2 = chromosome_2(c1, out_seq)
+    pop.append(c2)
+
+    # -----------------------------------------------------
+    # Chromosome 3
+    # -----------------------------------------------------
+    c3 = chromosome_3(c2, out_seq, LEN)
+    pop.append(c3)
+
+    # -----------------------------------------------------
+    # Chromosome 4
+    # -----------------------------------------------------
+    c4 = chromosome_4(c3)
+    pop.append(c4)
+
+    # -----------------------------------------------------
+    # Chromosome 5+
+    # -----------------------------------------------------
+    current = c4
+
+    while len(pop) < POP:
+
+        current = minor_adjustment(current)
+
+        pop.append(current.copy())
+
+    return pop
+
+
+# =========================================================
+# FINAL GA
+# =========================================================
+def GA(out_seq):
+
+    fitness_cache.clear()
+
+    # -----------------------------------------------------
+    # INITIAL POPULATION
+    # -----------------------------------------------------
+    pop = generate_population(out_seq, LEN, POP)
+
+    # -----------------------------------------------------
+    # GA EVOLUTION
+    # -----------------------------------------------------
     for g in range(GEN):
 
-        pop = sorted(pop, key=lambda x: fitness(x, out_seq), reverse=True)
+        # -------------------------------------------------
+        # SORT POPULATION
+        # -------------------------------------------------
+        pop = sorted(
+            pop,
+            key=lambda x: fitness(
+                to_sku_seq(x),
+                out_seq
+            ),
+            reverse=True
+        )
 
+        # -------------------------------------------------
+        # ELITISM
+        # -------------------------------------------------
         new_pop = pop[:ELITE]
 
+        # -------------------------------------------------
+        # GENERATE NEW CHROMOSOMES
+        # -------------------------------------------------
         while len(new_pop) < POP:
 
-            p1 = tournament(pop, out_seq)
-            p2 = tournament(pop, out_seq)
+            # ---------------------------------------------
+            # SELECT PARENT
+            # deterministic selection
+            # ---------------------------------------------
+            parent = new_pop[-1]
 
-            child = block_crossover(p1, p2, out_skus)
+            # ---------------------------------------------
+            # MINOR REFINEMENT
+            # ---------------------------------------------
+            child = minor_adjustment(parent)
 
-            child = smart_mutation(child, out_skus, out_times, out_weights)
+            # ---------------------------------------------
+            # KEEP FULL CHROMOSOME
+            # ---------------------------------------------
+            new_pop.append(child.copy())
 
-            child = repair_sequence(child, out_times, out_weights)
+        # -------------------------------------------------
+        # UPDATE POPULATION
+        # -------------------------------------------------
+        pop = new_pop
 
-            new_pop.append(child)
+        # -------------------------------------------------
+        # PRINT GENERATION BEST
+        # -------------------------------------------------
+        best_gen = pop[0]
 
-    pop = new_pop
-    
-    best = max(pop, key=lambda x: fitness(x, out_seq))
+        best_score = fitness(
+            to_sku_seq(best_gen),
+            out_seq
+        )
 
-    return best
+        print(
+            f"Generation {g+1} "
+            f"Best Score = {round(best_score,4)}"
+        )
 
-def estimate_times(seq):
+    # -----------------------------------------------------
+    # FINAL BEST
+    # -----------------------------------------------------
+    best = max(
+        pop,
+        key=lambda x: fitness(
+            to_sku_seq(x),
+            out_seq
+        )
+    )
 
-    times = []
-    t = 0
+    # -----------------------------------------------------
+    # PRINT FINAL RESULT
+    # -----------------------------------------------------
+    print("\n=== BEST CHROMOSOME ===")
 
-    for sku in seq:
+    print(to_sku_seq(best))
 
-        r = recipes[sku]
+    print("\n=== FULL DATA ===")
 
-        pt = 0
+    for item in best:
 
-        if r["layers"] == 3:
-            pt += sum(config.HEEL_TIME)/2
+        print(
+            f'{item["sku"]} | '
+            f'Time={item["time"]} | '
+            f'Line={item["line"]} | '
+            f'Oven={item["oven"]}'
+        )
 
-        pt += sum(config.SOFT_TIME)/2
-        pt += sum(config.TREAD_TIME)/2
+    # -----------------------------------------------------
+    # RETURN SKU SEQUENCE
+    # -----------------------------------------------------
+    return to_sku_seq(best)
 
-        t += pt
-        times.append(t)
 
-    return times
+def seq_direct(out_skus, LEN):
 
+    seq = out_skus[:LEN]
+
+    if len(seq) < LEN:
+        seq += [out_skus[-1]] * (LEN - len(seq))
+
+    return seq
 
 def seq_grouped(out_skus, out_times, out_weights, LEN):
 
@@ -417,6 +768,7 @@ def seq_grouped(out_skus, out_times, out_weights, LEN):
 
     return seq
 
+
 def zigzag_indices(n):
 
     # split into two big lines
@@ -447,21 +799,103 @@ def zigzag_indices(n):
 
     return order
 
-def seq_zigzag(out_skus, LEN):
 
-    n = len(out_skus)
+def seq_zigzag(out_seq, LEN, last_line="l1a"):
 
-    indices = zigzag_indices(n)
+    pattern = select_pattern(last_line)
+
+    grouped = {p: [] for p in ["l1a","l1b","l2a","l2b"]}
+
+    # group SKUs by line
+    for item in out_seq:
+
+        line = item["line"].lower()
+
+        if line in grouped:
+            grouped[line].append(item["sku"])
 
     seq = []
 
-    for idx in indices:
-        if idx < n and len(seq) < LEN:
-            seq.append(out_skus[idx])
-
-    # fill if needed
     while len(seq) < LEN:
-        seq.append(out_skus[-1])
+
+        added = False
+
+        for p in pattern:
+
+            if grouped[p]:
+
+                seq.append(grouped[p].pop(0))
+
+                added = True
+
+                if len(seq) >= LEN:
+                    break
+
+        if not added:
+            break
+
+    return seq
+
+
+def build_chromosome(out_skus, out_times, out_weights, LEN):
+
+    seq = []
+
+    # copy lists (important)
+    skus = out_skus.copy()
+    times = out_times.copy()
+    weights = out_weights.copy()
+
+    while skus and len(seq) < LEN:
+
+        # take first item
+        base_sku = skus[0]
+        base_time = times[0]
+
+        total_weight = 0
+        group_indices = []
+
+        # -----------------------------
+        # FIND VALID GROUP
+        # -----------------------------
+        for idx in range(len(skus)):
+
+            if skus[idx] != base_sku:
+                continue
+
+            # check time constraint
+            if abs(times[idx] - base_time) > 10:
+                continue
+
+            # check weight constraint
+            if total_weight + weights[idx] > 40:
+                continue
+
+            group_indices.append(idx)
+            total_weight += weights[idx]
+
+        # -----------------------------
+        # ADD GROUP TO SEQUENCE
+        # -----------------------------
+        for idx in group_indices:
+            if len(seq) < LEN:
+                seq.append(skus[idx])
+
+        # -----------------------------
+        # REMOVE USED ITEMS (reverse order!)
+        # -----------------------------
+        for idx in sorted(group_indices, reverse=True):
+            skus.pop(idx)
+            times.pop(idx)
+            weights.pop(idx)
+
+        # -----------------------------
+        # SAFETY: if nothing grouped
+        # -----------------------------
+        if not group_indices:
+            seq.append(skus.pop(0))
+            times.pop(0)
+            weights.pop(0)
 
     return seq
 
@@ -535,8 +969,8 @@ def repair_sequence(seq, out_times, out_weights):
         # reset if constraint violated
         if last_time is not None:
 
-            if abs(t - last_time) > 10 or total_weight + w > 40:
-                total_weight = 0
+            if total_weight + w > 40:
+                repaired.append(random.choice(seq))
 
         repaired.append(sku)
 
@@ -544,6 +978,7 @@ def repair_sequence(seq, out_times, out_weights):
         last_time = t
 
     return repaired
+
 
 def sequence_score(seq, out_skus):
 
@@ -556,52 +991,140 @@ def sequence_score(seq, out_skus):
     # normalize (0–1)
     return score / len(seq)
 
-def zigzag_score(seq):
+
+def zigzag_score(lines, pattern):
 
     score = 0
 
-    direction = 1  # alternate pattern
+    expected = []
 
-    for i in range(1, len(seq)):
+    while len(expected) < len(lines):
+        expected.extend(pattern)
 
-        if seq[i] == seq[i-1]:
-            val = 0
+    expected = expected[:len(lines)]
+
+    for i in range(len(lines)):
+
+        if lines[i].lower() == expected[i]:
+            score += 1
         else:
-            val = 1 if direction == 1 else -1
+            score -= 1
 
-        score += val
-
-        direction *= -1  # flip
-
-    # normalize
-    return (score + len(seq)) / (2 * len(seq))
+    return score
 
 
+def soft_order_score(seq, weight_map, max_weight=40):
 
-def soft_order_score(seq, out_weights):
+    """
+    Nonlinear grouping reward.
+
+    Example:
+    A A A → 1² + 2² + 3²
+    """
 
     if not seq:
         return 0
 
-    scores = []
+    total_score = 0
 
-    count = 1
-    total_weight = out_weights[0]
+    run_length = 1
 
-    scores.append(count)
+    # initial weight
+    first_weights = weight_map.get(seq[0], [0])
+
+    if isinstance(first_weights, list):
+        total_weight = sum(first_weights) / len(first_weights)
+    else:
+        total_weight = first_weights
+
+    # first tire
+    total_score += run_length ** 2
 
     for i in range(1, len(seq)):
 
-        if seq[i] == seq[i-1] and total_weight + out_weights[i] <= 40:
-            count += 1
-            total_weight += out_weights[i]
+        weights_list = weight_map.get(seq[i], [0])
+
+        if isinstance(weights_list, list):
+            w = sum(weights_list) / len(weights_list)
         else:
-            count = 1
-            total_weight = out_weights[i]
+            w = weights_list
 
-        scores.append(count)
+        # continue grouping
+        if seq[i] == seq[i-1] and (total_weight + w) <= max_weight:
 
-    total_score = sum(scores)
-    max_possible = sum(range(1, len(seq)+1))
+            run_length += 1
+            total_weight += w
 
-    return total_score / max_possible
+        # reset group
+        else:
+
+            run_length = 1
+            total_weight = w
+
+        # nonlinear reward
+        total_score += run_length ** 2
+
+    return total_score
+
+
+def normalize(value, min_val, max_val):
+
+    if max_val - min_val == 0:
+        return 0
+
+    return (value - min_val) / (max_val - min_val)
+
+
+def bottleneck_score(result, seq, weight_map):
+
+    util = result.get("util", {"soft":0,"oven":0,"heel":0,"tread":0})
+    bottleneck = max(util, key=util.get)
+
+    score = 0
+
+    # -------------------------
+    # SOFT BOTTLENECK
+    # -------------------------
+    if bottleneck == "soft":
+
+        # reward grouping (reuse your soft score logic)
+        score = soft_order_score(seq, weight_map)
+
+    # -------------------------
+    # OVEN BOTTLENECK
+    # -------------------------
+    elif bottleneck == "oven":
+
+        # reward sequence matching (smooth flow)
+        score = 1 / (1 + result["blocking"])
+
+    # -------------------------
+    # HEEL / TREAD BOTTLENECK
+    # -------------------------
+    else:
+
+        score = 1 / (1 + result["setup"])
+
+    return score
+
+
+def tournament(pop, out_seq, k=3):
+    candidates = random.sample(pop, k)
+    return max(candidates, key=lambda x: fitness(x, out_seq))
+
+def get_perturb_rate(gen, GEN):
+
+    # start high → decrease over time
+    return 0.6 - (0.3 * (gen / GEN))
+
+
+def get_mutation_rate(gen, GEN):
+
+    return 0.3 - (0.2 * (gen / GEN))
+
+
+def population_diversity(pop):
+
+    unique = set(tuple(p) for p in pop)
+
+    return len(unique) / len(pop)

@@ -13,6 +13,15 @@ class Oven:
 
         self.soft_weight = recipes[sku]["weight"]
 
+        if self.oven_id <= 23:
+            self.line = "l1a"
+        elif self.oven_id > 23 and self.oven_id <= 46:
+            self.line = "l1b"
+        elif self.oven_id > 46 and self.oven_id <= 68:
+            self.line = "l2a"
+        else:
+            self.line = "l2b"
+
     def update(self, time_passed):
 
         self.remaining_time -= time_passed

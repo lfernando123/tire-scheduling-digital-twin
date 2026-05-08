@@ -49,10 +49,11 @@ class OvenSystem:
             if oven.remaining_time <= horizon:
 
                 finishing.append({
-                    "oven_id": oven.oven_id,
+                    "oven": oven.oven_id,
                     "sku": oven.sku,
                     "time": oven.remaining_time,
-                    "soft_weight": oven.soft_weight
+                    "weight": oven.soft_weight,
+                    "line": oven.line
                 })
 
         # sort by earliest completion
