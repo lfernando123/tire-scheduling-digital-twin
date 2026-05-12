@@ -122,11 +122,10 @@ def fitness(seq, out_seq):
     # FINAL SCORE
     # --------------------------------
     score = (
-        0.50 * soft_final
-        + 0.20 * match_norm
-        + 0.10 * zigzag_norm
+        0.40 * soft_final
+        + 0.30 * match_norm
+        + 0.20 * zigzag_norm
         + 0.10 * throughput_norm
-        + 0.10 * setup_penalty
     )
 
     # --------------------------------
@@ -214,7 +213,7 @@ def perturb_sequence(seq, SKUS, intensity=0.2):
 # Original curing out sequence
 # ---------------------------------------------------------
 def chromosome_1(out_seq, LEN):
-    print("Chromosome 1:", [item["sku"] for item in out_seq[:LEN]])
+    print("Chromosome 1:", [f'{item["sku"]}:{item["line"]}' for item in out_seq[:LEN]])
     return out_seq[:LEN]
 
 
@@ -289,14 +288,7 @@ def chromosome_2(c1, out_seq):
 
         target_line = pattern[p % len(pattern)]
 
-        if p % len(pattern) == 0:
-            next_valid_line = pattern[2]
-        elif p % len(pattern) == 1:
-            next_valid_line = pattern[3]
-        elif p % len(pattern) == 2:
-            next_valid_line = pattern[0]
-        else:
-            next_valid_line = pattern[1]
+        next_valid_line = pattern[(p+2) % len(pattern)]
 
         found = False
 
@@ -311,13 +303,13 @@ def chromosome_2(c1, out_seq):
 
             if line == target_line:
 
-                    seq.append(item)
+                seq.append(item)
 
-                    remaining.pop(i)
+                remaining.pop(i)
 
-                    found = True
+                found = True
 
-                    break
+                break
 
         # --------------------------------
         # IF NOT FOUND
@@ -332,7 +324,7 @@ def chromosome_2(c1, out_seq):
 
                 line = item["line"].lower()
 
-                if line == target_line and time - prev_sku_time <= 5:
+                if line == target_line and time - prev_sku_time <= 10:
 
                     seq.append(item)
 
@@ -348,7 +340,7 @@ def chromosome_2(c1, out_seq):
 
 
         p += 1
-    print("Chromosome 2:", [item["sku"] for item in seq[:LEN]])
+    print("Chromosome 2:", [f'{item["sku"]}:{item["line"]}' for item in seq[:LEN]])
     return seq
 
 
@@ -422,6 +414,7 @@ def chromosome_3(c2, out_seq, LEN):
             total_weight += item["weight"]
 
             if len(seq) >= LEN:
+                print("Chromosome 3:", [f'{item["sku"]}:{item["line"]}' for item in seq[:LEN]])
                 return seq
 
     # fill remaining
@@ -485,7 +478,7 @@ def chromosome_4(c3):
         if not added:
             break
 
-    print("Chromosome 4:", [item["sku"] for item in seq])
+    print("Chromosome 4:", [f'{item["sku"]}:{item["line"]}' for item in seq[:LEN]])
     return seq
 
 
